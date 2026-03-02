@@ -13,7 +13,7 @@
  */
 
 const { WebSocketServer } = require('ws');
-const https  = require('http');
+const http  = require('http');
 
 const PORT  = process.env.PORT || 8080;
 
