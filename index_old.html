@@ -1,0 +1,778 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#0a0806">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-fullscreen">
+  <meta name="apple-mobile-web-app-title" content="Presence">
+  <link rel="manifest" href="manifest.json">
+  <title>Presence</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;1,300&family=Inconsolata:wght@300&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --warm: #c8a97e;
+      --dim: #7a6248;
+      --bg: #0a0806;
+      --overlay-bg: rgba(10, 8, 6, 0.72);
+      --fade: 400ms ease;
+    }
+
+    html, body {
+      width: 100%; height: 100%;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--warm);
+      font-family: 'Cormorant Garamond', Georgia, serif;
+    }
+
+    /* ── Hidden video source ── */
+    #videoSrc {
+      position: absolute;
+      width: 1px; height: 1px;
+      opacity: 0; pointer-events: none;
+      top: -9999px;
+    }
+
+    /* ── Canvas: the single visible truth ── */
+    #canvas {
+      position: fixed;
+      inset: 0;
+      width: 100%; height: 100%;
+      display: block;
+      object-fit: cover;
+    }
+
+    /* ── Reconnect overlay ── */
+    #overlay {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: var(--overlay-bg);
+      backdrop-filter: blur(2px);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity var(--fade);
+      z-index: 10;
+    }
+    #overlay.visible {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    #overlay-text {
+      font-size: clamp(1.1rem, 3.5vw, 1.8rem);
+      font-weight: 300;
+      font-style: italic;
+      letter-spacing: 0.04em;
+      color: var(--warm);
+      text-align: center;
+      line-height: 1.7;
+    }
+    #overlay-sub {
+      margin-top: 1.4rem;
+      font-family: 'Inconsolata', monospace;
+      font-size: clamp(0.6rem, 1.8vw, 0.78rem);
+      letter-spacing: 0.18em;
+      color: var(--dim);
+      text-transform: uppercase;
+    }
+
+    /* ── Status bar (top-right, always subtle) ── */
+    #status-bar {
+      position: fixed;
+      top: 1.2rem;
+      right: 1.4rem;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      gap: 0.7rem;
+      opacity: 0.35;
+      transition: opacity 0.3s;
+    }
+    #status-bar:hover { opacity: 0.9; }
+
+    .dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--dim);
+      transition: background 0.5s;
+    }
+    .dot.live { background: #7eb87e; }
+    .dot.waiting { background: var(--warm); animation: pulse 2s infinite; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+
+    #status-label {
+      font-family: 'Inconsolata', monospace;
+      font-size: 0.68rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--dim);
+    }
+
+    /* ── Controls (bottom, appear on hover) ── */
+    #controls {
+      position: fixed;
+      bottom: 1.8rem;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 20;
+      display: flex;
+      gap: 1rem;
+      opacity: 0;
+      transition: opacity 0.35s;
+    }
+    body:hover #controls, body:focus-within #controls { opacity: 0.7; }
+
+    .btn {
+      background: rgba(200,169,126,0.08);
+      border: 1px solid rgba(200,169,126,0.2);
+      color: var(--warm);
+      font-family: 'Inconsolata', monospace;
+      font-size: 0.7rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      padding: 0.5rem 1.1rem;
+      cursor: pointer;
+      border-radius: 2px;
+      transition: background 0.2s, border-color 0.2s;
+    }
+    .btn:hover {
+      background: rgba(200,169,126,0.18);
+      border-color: rgba(200,169,126,0.5);
+    }
+
+    /* ── Grain overlay for warmth ── */
+    #grain {
+      position: fixed;
+      inset: 0;
+      z-index: 5;
+      pointer-events: none;
+      opacity: 0.028;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+      background-size: 128px 128px;
+    }
+
+    /* ── Setup panel (shown before connection) ── */
+    #setup {
+      position: fixed;
+      inset: 0;
+      z-index: 30;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: var(--bg);
+      transition: opacity 0.6s;
+    }
+    #setup.hidden { opacity: 0; pointer-events: none; }
+
+    #setup h1 {
+      font-size: clamp(2rem, 6vw, 3.5rem);
+      font-weight: 300;
+      font-style: italic;
+      letter-spacing: 0.03em;
+      margin-bottom: 0.4rem;
+    }
+    #setup p {
+      font-family: 'Inconsolata', monospace;
+      font-size: 0.72rem;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--dim);
+      margin-bottom: 2.8rem;
+    }
+
+    .input-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+      width: min(380px, 88vw);
+      margin-bottom: 1.1rem;
+    }
+    .input-group label {
+      font-family: 'Inconsolata', monospace;
+      font-size: 0.65rem;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--dim);
+    }
+    .input-group input {
+      background: rgba(200,169,126,0.05);
+      border: 1px solid rgba(200,169,126,0.18);
+      color: var(--warm);
+      font-family: 'Inconsolata', monospace;
+      font-size: 0.85rem;
+      padding: 0.65rem 0.9rem;
+      border-radius: 2px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .input-group input:focus {
+      border-color: rgba(200,169,126,0.5);
+    }
+    .input-group input::placeholder { color: var(--dim); opacity: 0.5; }
+
+    #connect-btn {
+      margin-top: 1rem;
+      padding: 0.75rem 2.4rem;
+      font-size: 0.75rem;
+    }
+    #role-toggle {
+      display: flex;
+      gap: 0;
+      border: 1px solid rgba(200,169,126,0.2);
+      border-radius: 2px;
+      overflow: hidden;
+      width: min(380px, 88vw);
+      margin-bottom: 0.5rem;
+    }
+    .role-btn {
+      flex: 1;
+      padding: 0.55rem;
+      background: transparent;
+      border: none;
+      color: var(--dim);
+      font-family: 'Inconsolata', monospace;
+      font-size: 0.68rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: background 0.2s, color 0.2s;
+    }
+    .role-btn.active {
+      background: rgba(200,169,126,0.12);
+      color: var(--warm);
+    }
+  </style>
+</head>
+<body>
+
+<!-- Setup panel -->
+<div id="setup">
+  <h1>presence</h1>
+  <p>persistent · quiet · always here</p>
+
+  <div id="role-toggle">
+    <button class="role-btn active" data-role="caller">Send</button>
+    <button class="role-btn" data-role="receiver">Receive</button>
+  </div>
+
+  <div class="input-group">
+    <label>Signaling Server</label>
+    <input id="wsUrl" type="text" placeholder="wss://your-server.com/signal" value="">
+  </div>
+  <div class="input-group">
+    <label>Room ID</label>
+    <input id="roomId" type="text" placeholder="a secret room name">
+  </div>
+  <div class="input-group" id="turnGroup">
+    <label>TURN Server</label>
+    <input id="turnUrl" type="text" placeholder="turn:your-turn.com:3478">
+  </div>
+  <div class="input-group" id="turnCredGroup">
+    <label>TURN Credentials (user:pass)</label>
+    <input id="turnCred" type="text" placeholder="username:password">
+  </div>
+
+  <button class="btn" id="connect-btn">Begin</button>
+</div>
+
+<!-- Hidden video -->
+<video id="videoSrc" autoplay playsinline muted></video>
+
+<!-- Canvas (the only visible frame) -->
+<canvas id="canvas"></canvas>
+
+<!-- Grain -->
+<div id="grain"></div>
+
+<!-- Reconnect overlay -->
+<div id="overlay">
+  <div id="overlay-text">Reconnecting…<br>I'm here.</div>
+  <div id="overlay-sub">waiting for signal</div>
+</div>
+
+<!-- Status -->
+<div id="status-bar">
+  <div class="dot" id="dot"></div>
+  <span id="status-label">idle</span>
+</div>
+
+<!-- Controls -->
+<div id="controls">
+  <button class="btn" id="muteBtn">Mute</button>
+  <button class="btn" id="camBtn">Camera Off</button>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════
+// PRESENCE — Persistent Emotional State Machine with Media Transport
+// Architecture: MediaStream → hidden<video> → canvas → IndexedDB
+// ═══════════════════════════════════════════════════════════════
+
+const $ = id => document.getElementById(id);
+
+// ── State ──────────────────────────────────────────────────────
+const state = {
+  role: 'caller',          // 'caller' | 'receiver'
+  ws: null,
+  pc: null,
+  localStream: null,
+  canvasRunning: false,
+  retryTimer: null,
+  wakeLock: null,
+  dbReady: false,
+  db: null,
+  isMuted: false,
+  isCamOff: false,
+  connected: false,
+  roomId: '',
+};
+
+// ── DOM refs ───────────────────────────────────────────────────
+const videoSrc  = $('videoSrc');
+const canvas    = $('canvas');
+const ctx       = canvas.getContext('2d');
+const overlay   = $('overlay');
+const dot       = $('dot');
+const statusLbl = $('status-label');
+const setup     = $('setup');
+
+// ═══════════════════════════════════════════════════════════════
+// 1. CANVAS ENGINE — single source of truth
+// ═══════════════════════════════════════════════════════════════
+
+function resizeCanvas() {
+  canvas.width  = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+let rafId = null;
+
+function startCanvasLoop() {
+  if (state.canvasRunning) return;
+  state.canvasRunning = true;
+
+  function draw() {
+    if (videoSrc.readyState >= 2 && !videoSrc.paused) {
+      const vw = videoSrc.videoWidth  || 1;
+      const vh = videoSrc.videoHeight || 1;
+      const cw = canvas.width;
+      const ch = canvas.height;
+
+      // Cover-fit the video into canvas
+      const scale = Math.max(cw / vw, ch / vh);
+      const w = vw * scale;
+      const h = vh * scale;
+      const x = (cw - w) / 2;
+      const y = (ch - h) / 2;
+
+      ctx.drawImage(videoSrc, x, y, w, h);
+    }
+    // If video is dead, canvas just holds its last paint — no flicker.
+    rafId = requestAnimationFrame(draw);
+  }
+  draw();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 2. INDEXEDDB — last-frame persistence
+// ═══════════════════════════════════════════════════════════════
+
+function initDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open('presence-frames', 1);
+    req.onupgradeneeded = e => {
+      e.target.result.createObjectStore('frames');
+    };
+    req.onsuccess = e => {
+      state.db = e.target.result;
+      state.dbReady = true;
+      loadLastFrame(); // restore immediately
+      resolve();
+    };
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function saveFrame() {
+  if (!state.dbReady || canvas.width === 0) return;
+
+  // Downscale to 480xN for storage efficiency
+  const off = new OffscreenCanvas(480, Math.round(480 * canvas.height / canvas.width));
+  off.getContext('2d').drawImage(canvas, 0, 0, off.width, off.height);
+
+  off.convertToBlob({ type: 'image/jpeg', quality: 0.6 }).then(blob => {
+    const tx = state.db.transaction('frames', 'readwrite');
+    tx.objectStore('frames').put(blob, 'last');
+  }).catch(() => {});
+}
+
+function loadLastFrame() {
+  if (!state.dbReady) return;
+  const tx = state.db.transaction('frames', 'readonly');
+  const req = tx.objectStore('frames').get('last');
+  req.onsuccess = () => {
+    if (!req.result) return;
+    const url = URL.createObjectURL(req.result);
+    const img = new Image();
+    img.onload = () => {
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(url);
+    };
+    img.src = url;
+  };
+}
+
+// Save one frame every 4 seconds
+setInterval(() => {
+  if (state.connected) saveFrame();
+}, 4000);
+
+// ═══════════════════════════════════════════════════════════════
+// 3. WAKE LOCK — prevent sleep
+// ═══════════════════════════════════════════════════════════════
+
+async function requestWakeLock() {
+  if (!('wakeLock' in navigator)) return;
+  try {
+    state.wakeLock = await navigator.wakeLock.request('screen');
+    state.wakeLock.addEventListener('release', () => {
+      // Re-acquire if tab still visible
+      if (document.visibilityState === 'visible') {
+        setTimeout(requestWakeLock, 1000);
+      }
+    });
+  } catch (e) { /* not critical */ }
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') requestWakeLock();
+});
+
+// ═══════════════════════════════════════════════════════════════
+// 4. STATUS UI
+// ═══════════════════════════════════════════════════════════════
+
+function setStatus(label, state_) {
+  statusLbl.textContent = label;
+  dot.className = 'dot';
+  if (state_ === 'live')    dot.classList.add('live');
+  if (state_ === 'waiting') dot.classList.add('waiting');
+}
+
+function showOverlay() {
+  overlay.classList.add('visible');
+}
+
+function hideOverlay() {
+  overlay.classList.remove('visible');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 5. WEBRTC — forced relay, infinite ICE restart
+// ═══════════════════════════════════════════════════════════════
+
+function buildICEConfig() {
+  const servers = [];
+
+  // STUN (fallback only; we force relay)
+  servers.push({ urls: 'stun:stun.l.google.com:19302' });
+
+  const turnUrl  = $('turnUrl').value.trim();
+  const turnCred = $('turnCred').value.trim();
+  if (turnUrl && turnCred) {
+    const [username, credential] = turnCred.split(':');
+    servers.push({ urls: turnUrl, username, credential });
+    // Also try TCP variant
+    if (turnUrl.startsWith('turn:')) {
+      servers.push({ urls: turnUrl + '?transport=tcp', username, credential });
+    }
+  }
+
+  return {
+    iceServers: servers,
+    iceTransportPolicy: turnUrl ? 'relay' : 'all',
+    bundlePolicy: 'max-bundle',
+    rtcpMuxPolicy: 'require',
+  };
+}
+
+function createPeerConnection() {
+  if (state.pc) {
+    state.pc.close();
+    state.pc = null;
+  }
+
+  const pc = new RTCPeerConnection(buildICEConfig());
+  state.pc = pc;
+
+  // Add local stream tracks
+  if (state.localStream) {
+    state.localStream.getTracks().forEach(t => pc.addTrack(t, state.localStream));
+  }
+
+  // Receive remote stream → hidden video
+  pc.ontrack = e => {
+    if (e.streams[0]) {
+      videoSrc.srcObject = e.streams[0];
+      videoSrc.play().catch(() => {});
+      startCanvasLoop();
+    }
+  };
+
+  // ICE candidates → forward via signaling
+  pc.onicecandidate = e => {
+    if (e.candidate) {
+      sigSend({ type: 'ice', candidate: e.candidate });
+    }
+  };
+
+  // Connection state machine
+  pc.onconnectionstatechange = () => {
+    const s = pc.connectionState;
+    console.log('[WebRTC] connectionState:', s);
+
+    if (s === 'connected') {
+      state.connected = true;
+      clearRetryLoop();
+      hideOverlay();
+      setStatus('live', 'live');
+      requestWakeLock();
+    }
+
+    if (s === 'failed' || s === 'disconnected') {
+      state.connected = false;
+      showOverlay();
+      setStatus('reconnecting', 'waiting');
+      startRetryLoop();
+    }
+
+    if (s === 'closed') {
+      state.connected = false;
+      setStatus('closed', '');
+    }
+  };
+
+  pc.oniceconnectionstatechange = () => {
+    if (pc.iceConnectionState === 'failed') {
+      startRetryLoop();
+    }
+  };
+
+  return pc;
+}
+
+// Infinite ICE restart loop — no max attempts
+function startRetryLoop() {
+  if (state.retryTimer) return; // already running
+  console.log('[ICE] Starting infinite retry loop');
+
+  async function attempt() {
+    if (!state.pc || state.pc.signalingState === 'closed') {
+      // Full reconnect needed
+      await fullReconnect();
+      return;
+    }
+    try {
+      const offer = await state.pc.createOffer({ iceRestart: true });
+      await state.pc.setLocalDescription(offer);
+      sigSend({ type: 'offer', sdp: offer });
+    } catch (e) {
+      console.warn('[ICE] Restart failed:', e);
+    }
+    state.retryTimer = setTimeout(attempt, 4000);
+  }
+
+  attempt();
+}
+
+function clearRetryLoop() {
+  if (state.retryTimer) {
+    clearTimeout(state.retryTimer);
+    state.retryTimer = null;
+  }
+}
+
+async function fullReconnect() {
+  console.log('[WebRTC] Full reconnect');
+  createPeerConnection();
+  if (state.role === 'caller') {
+    await startCall();
+  }
+  state.retryTimer = setTimeout(() => {
+    if (!state.connected) startRetryLoop();
+  }, 5000);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 6. SIGNALING — WebSocket relay
+// ═══════════════════════════════════════════════════════════════
+
+function connectSignaling(wsUrl, roomId) {
+  if (state.ws) state.ws.close();
+
+  const ws = new WebSocket(wsUrl);
+  state.ws = ws;
+
+  ws.onopen = () => {
+    console.log('[WS] Connected');
+    ws.send(JSON.stringify({ type: 'join', room: roomId, role: state.role }));
+    setStatus('waiting', 'waiting');
+  };
+
+  ws.onmessage = async e => {
+    const msg = JSON.parse(e.data);
+    await handleSignal(msg);
+  };
+
+  ws.onclose = () => {
+    console.log('[WS] Disconnected — retrying in 3s');
+    setStatus('no signal', 'waiting');
+    setTimeout(() => connectSignaling(wsUrl, roomId), 3000);
+  };
+
+  ws.onerror = () => ws.close();
+}
+
+function sigSend(msg) {
+  if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+    state.ws.send(JSON.stringify({ ...msg, room: state.roomId }));
+  }
+}
+
+async function handleSignal(msg) {
+  const pc = state.pc;
+
+  if (msg.type === 'peer-joined' && state.role === 'caller') {
+    await startCall();
+  }
+
+  if (msg.type === 'offer') {
+    if (!pc || pc.signalingState === 'closed') createPeerConnection();
+    await state.pc.setRemoteDescription(msg.sdp);
+    const answer = await state.pc.createAnswer();
+    await state.pc.setLocalDescription(answer);
+    sigSend({ type: 'answer', sdp: answer });
+  }
+
+  if (msg.type === 'answer' && pc) {
+    if (pc.signalingState === 'have-local-offer') {
+      await pc.setRemoteDescription(msg.sdp);
+    }
+  }
+
+  if (msg.type === 'ice' && pc) {
+    try { await pc.addIceCandidate(msg.candidate); } catch (e) {}
+  }
+}
+
+async function startCall() {
+  const pc = state.pc;
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  sigSend({ type: 'offer', sdp: offer });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 7. LOCAL MEDIA
+// ═══════════════════════════════════════════════════════════════
+
+async function getLocalStream() {
+  try {
+    state.localStream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
+      audio: true,
+    });
+
+    // If caller: show own camera on canvas while waiting
+    if (state.role === 'caller') {
+      videoSrc.srcObject = state.localStream;
+      videoSrc.play().catch(() => {});
+      startCanvasLoop();
+    }
+  } catch (e) {
+    console.warn('[Media] getUserMedia failed:', e);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 8. CONTROLS
+// ═══════════════════════════════════════════════════════════════
+
+$('muteBtn').onclick = () => {
+  state.isMuted = !state.isMuted;
+  state.localStream?.getAudioTracks().forEach(t => t.enabled = !state.isMuted);
+  $('muteBtn').textContent = state.isMuted ? 'Unmute' : 'Mute';
+};
+
+$('camBtn').onclick = () => {
+  state.isCamOff = !state.isCamOff;
+  state.localStream?.getVideoTracks().forEach(t => t.enabled = !state.isCamOff);
+  $('camBtn').textContent = state.isCamOff ? 'Camera On' : 'Camera Off';
+};
+
+// ═══════════════════════════════════════════════════════════════
+// 9. SETUP UI
+// ═══════════════════════════════════════════════════════════════
+
+document.querySelectorAll('.role-btn').forEach(btn => {
+  btn.onclick = () => {
+    document.querySelectorAll('.role-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    state.role = btn.dataset.role;
+  };
+});
+
+$('connect-btn').onclick = async () => {
+  const wsUrl  = $('wsUrl').value.trim();
+  const roomId = $('roomId').value.trim();
+
+  if (!wsUrl || !roomId) {
+    $('wsUrl').focus();
+    return;
+  }
+
+  state.roomId = roomId;
+
+  // Hide setup
+  setup.classList.add('hidden');
+  setTimeout(() => setup.style.display = 'none', 700);
+
+  setStatus('initializing', 'waiting');
+
+  // Init everything
+  await initDB();
+  await getLocalStream();
+  createPeerConnection();
+  connectSignaling(wsUrl, roomId);
+};
+
+// ═══════════════════════════════════════════════════════════════
+// 10. SERVICE WORKER (PWA)
+// ═══════════════════════════════════════════════════════════════
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+
+// Start canvas loop so last saved frame shows immediately
+initDB();
+startCanvasLoop();
+
+</script>
+</body>
+</html>
