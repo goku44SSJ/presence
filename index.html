@@ -692,17 +692,28 @@ function createPeerConnection() {
 
     if (s === 'connected') {
       state.connected = true;
+      clearTimeout(state.disconnectTimer);
       clearRetryLoop();
       hideOverlay();
       setStatus('live', 'live');
       requestWakeLock();
     }
 
-    if (s === 'failed' || s === 'disconnected') {
+    if (s === 'failed') {
       state.connected = false;
       showOverlay();
       setStatus('reconnecting', 'waiting');
       startRetryLoop();
+    }
+
+    if (s === 'disconnected') {
+      showOverlay();
+      setStatus('unstable', 'waiting');
+      state.disconnectTimer = setTimeout(() => {
+        if (state.pc?.connectionState === 'disconnected') {
+          startRetryLoop();
+        }
+      }, 6000);
     }
 
     if (s === 'closed') {
@@ -799,28 +810,45 @@ function sigSend(msg) {
 }
 
 async function handleSignal(msg) {
-  const pc = state.pc;
-
   if (msg.type === 'peer-joined' && state.role === 'caller') {
+    state.remoteDescSet = false;
+    state.iceCandidateBuffer = [];
     await startCall();
   }
 
   if (msg.type === 'offer') {
-    if (!pc || pc.signalingState === 'closed') createPeerConnection();
+    if (!state.pc || state.pc.signalingState === 'closed') createPeerConnection();
+    state.remoteDescSet = false;
+    state.iceCandidateBuffer = [];
     await state.pc.setRemoteDescription(msg.sdp);
+    state.remoteDescSet = true;
+    for (const c of state.iceCandidateBuffer) {
+      try { await state.pc.addIceCandidate(c); } catch(e) {}
+    }
+    state.iceCandidateBuffer = [];
     const answer = await state.pc.createAnswer();
     await state.pc.setLocalDescription(answer);
     sigSend({ type: 'answer', sdp: answer });
   }
 
-  if (msg.type === 'answer' && pc) {
-    if (pc.signalingState === 'have-local-offer') {
-      await pc.setRemoteDescription(msg.sdp);
+  if (msg.type === 'answer' && state.pc) {
+    if (state.pc.signalingState === 'have-local-offer') {
+      await state.pc.setRemoteDescription(msg.sdp);
+      state.remoteDescSet = true;
+      for (const c of state.iceCandidateBuffer) {
+        try { await state.pc.addIceCandidate(c); } catch(e) {}
+      }
+      state.iceCandidateBuffer = [];
     }
   }
 
-  if (msg.type === 'ice' && pc) {
-    try { await pc.addIceCandidate(msg.candidate); } catch (e) {}
+  if (msg.type === 'ice') {
+    if (state.remoteDescSet && state.pc) {
+      try { await state.pc.addIceCandidate(msg.candidate); } catch(e) {}
+    } else {
+      state.iceCandidateBuffer = state.iceCandidateBuffer || [];
+      state.iceCandidateBuffer.push(msg.candidate);
+    }
   }
 }
 
