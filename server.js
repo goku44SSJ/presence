@@ -13,17 +13,16 @@
  */
 
 const { WebSocketServer } = require('ws');
-const https  = require('https');
-const fs = require('fs');
+const https  = require('http');
 
 const PORT  = process.env.PORT || 8080;
 
 // rooms: Map<roomId, Set<WebSocket>>
 const rooms = new Map();
 
-const server = https.createServer({
-  cert: fs.readFileSync('localhost.pem'),
-  key:  fs.readFileSync('localhost-key.pem'),
+const server = http.createServer((req, res) => {
+  res.writeHead(200);
+  res.end('presence signaling');
 });
 
 const wss = new WebSocketServer({ server });
